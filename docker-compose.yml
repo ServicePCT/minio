@@ -1,0 +1,19 @@
+version: "3.7"
+services:
+  compose_file:
+    dns:
+      - "192.168.127.1"
+    image: minio/minio
+    volumes:
+      - data:data
+    working_dir: /app/scripts_ps
+    container_name: compose_file
+    restart: unless-stopped
+    command: python service_start.py
+    networks:
+      local-network:
+networks:
+  local-network:
+    external: true
+volumes:
+  data:
