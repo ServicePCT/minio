@@ -1,19 +1,22 @@
-version: "3.7"
+version: '3.8'
+
 services:
-  compose_file:
-    dns:
-      - "192.168.127.1"
-    image: minio/minio
-#    volumes:
-#      - data:/data
-    working_dir: /app/scripts_ps
+  minio:
+    image: minio/minio:latest
     container_name: minio
-    restart: unless-stopped
-    command: python service_start.py
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"  # Для доступа к консоли управления MinIO
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
     networks:
       local-network:
+volumes:
+  minio_data:
 networks:
   local-network:
     external: true
-#volumes:
-#  data:
