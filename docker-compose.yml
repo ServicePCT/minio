@@ -4,8 +4,8 @@ services:
     dns:
       - "192.168.127.1"
     image: minio/minio
-    volumes:
-      - data:/data
+#    volumes:
+#      - data:/data
     working_dir: /app/scripts_ps
     container_name: minio
     restart: unless-stopped
@@ -15,5 +15,5 @@ services:
 networks:
   local-network:
     external: true
-volumes:
-  data:
+#volumes:
+#  data:
