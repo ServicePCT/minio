@@ -7,8 +7,6 @@ services:
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
-      MINIO_ACCESS_KEY: z3pUX4l6KWmHjA3VsRrv
-      MINIO_SECRET_KEY: hq5HBUuLbAfjiwl1Z8iF797ahXO3WVlGpRBpNb0g
       MINIO_REGION: kz-ala-dev
       MINIO_BROWSER: on
     ports:
