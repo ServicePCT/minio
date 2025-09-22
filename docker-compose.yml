@@ -9,6 +9,7 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
       MINIO_REGION: kz-ala-dev
+      MINIO_DEFAULT_BUCKETS: registry,record,whatsapp
       MINIO_BROWSER: on
     ports:
       - "9000:9000"
