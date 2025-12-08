@@ -1,13 +1,11 @@
-version: '3.8'
-
 services:
   minio:
     image: minio/minio:latest
     container_name: minio
     restart: unless-stopped
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
       MINIO_REGION: kz-ala-dev
       MINIO_DEFAULT_BUCKETS: registry,record,whatsapp
       MINIO_BROWSER: on
@@ -19,8 +17,13 @@ services:
     command: server /data --console-address ":9001"
     networks:
       local-network:
+
 volumes:
   minio_data:
+
 networks:
   local-network:
     external: true
+
+
+
