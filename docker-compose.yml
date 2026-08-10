@@ -12,6 +12,9 @@ services:
     # с записями разговоров — не то место, где такое хочется обнаружить постфактум.
     # Обновление = осознанная правка этой строки через PR.
     image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    # Имя задано явно и коротко. Без container_name compose лепит имя из каталога и номера
+    # (`minio-minio-1`), что нечитаемо в docker ps и logs. Имена глобальны для хоста,
+    # поэтому у каждого проекта свой понятный префикс.
     container_name: minio          # другие сервисы ходят в него по имени minio в local-network
     restart: unless-stopped
     environment:
@@ -65,6 +68,7 @@ services:
   # Контейнер отрабатывает и завершается — Exited (0) в `docker compose ps` это норма.
   # Идемпотентен: --ignore-existing не трогает уже существующие бакеты и их содержимое.
   minio-init:
+    container_name: minio-init
     image: minio/mc:RELEASE.2025-04-16T18-13-26Z
     depends_on:
       minio:
