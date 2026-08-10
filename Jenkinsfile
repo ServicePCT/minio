@@ -1,186 +1,97 @@
+// minio — CI/CD (HAP-404, онбординг в новый Jenkins).
+//
+// Конфигурация сборки живёт ЗДЕСЬ, в репозитории проекта, а не в настройках Jenkins —
+// требование HAP-388. Общие шаги (composeDeploy/notify) — в библиотеке happydebt:
+// https://github.com/ServicePCT/jenkins-shared-library
+//
+// У minio нет ни своей сборки, ни тестов: это готовый образ с конфигурацией. Поэтому
+// pipeline короткий — только выкатка и проверка, что стек поднялся.
+
+@Library('happydebt') _
+
 pipeline {
     agent any
 
-    environment {
-        REMOTE_DIR = "${params.REMOTE_DIR ?: 'DEPLOY'}"
-        REMOTE_SERVER = "${params.REMOTE_SERVER ?: 'ndev.happydebt.kz'}"
-        GIT_CREDENTIALS = "${params.GIT_CREDENTIALS ?: 'ssh-key'}"
-        GIT_DEPLOY_BRANCH = "${params.GIT_DEPLOY_BRANCH ?: '*/main'}"
-        DOCKER_DEPLOYMENT_TARGET = "${params.DOCKER_DEPLOYMENT_TARGET ?: 'minio'}"
+    parameters {
+        // Целевые хосты — параметрами с дефолтами прямо здесь.
+        // ⚠️ При смене дефолта помните: Jenkins применяет новое значение со ВТОРОЙ сборки
+        // (см. jenkins-infra/DEPLOY.md §10). После правки прогоните сборку дважды.
+        string(name: 'STAGING_HOST', defaultValue: 'prog@vm-stage.happydebt.kz', description: 'user@host стенда; пусто — выкатка пропускается')
+        string(name: 'STAGING_PATH', defaultValue: '/srv/minio', description: 'каталог с docker-compose.yml на стенде')
+        string(name: 'PROD_HOST',    defaultValue: '', description: 'user@host прода; пусто — выкатка пропускается')
+        string(name: 'PROD_PATH',    defaultValue: '/srv/minio', description: 'каталог с docker-compose.yml на проде')
+    }
 
-        MINIO_ROOT_USER = "${params.MINIO_ROOT_USER ?: 'minioadmin'}"
-        MINIO_ROOT_PASSWORD = "${params.MINIO_ROOT_PASSWORD ?: 'minioadmin'}"
-
-        PROJECT_NAME = "minio"
-        PROJECT_DIR = "${REMOTE_DIR}/${PROJECT_NAME}"
-        TARBALL_NAME = "${PROJECT_NAME}.tar.gz"
-        GIT_REPOSITORY_URL = "git@github.com:ServicePCT/${PROJECT_NAME}.git"
+    options {
+        timeout(time: 20, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '30'))
+        timestamps()
+        // Две выкатки хранилища одновременно — гонка на целевом хосте.
+        disableConcurrentBuilds()
     }
 
     stages {
-        stage('Checkout') {
+        stage('проверка конфигурации') {
             steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: env.GIT_DEPLOY_BRANCH]],
-                    userRemoteConfigs: [[
-                        url: env.GIT_REPOSITORY_URL,
-                        credentialsId: env.GIT_CREDENTIALS
-                    ]],
-                    extensions: [
-                        [
-                            $class: 'SubmoduleOption',
-                            disableSubmodules: false,
-                            recursiveSubmodules: true,
-                            parentCredentials: true
-                        ]
-                    ]
-                ])
-                
+                // Своих тестов у проекта нет, но синтаксис compose проверить стоит: сломанный
+                // YAML лучше поймать здесь, чем на целевом хосте в середине выкатки.
+                //
+                // Обязательные переменные подставляем заглушками прямо здесь. Через
+                // --env-file .env.example не выйдет: там пароли намеренно пустые, а
+                // ${VAR:?} на пустом значении уронит проверку. Реальные секреты в CI не
+                // нужны — `config` только раскрывает подстановки и проверяет структуру.
                 sh '''
-                    echo "=== Verifying checkout ==="
-                    git log -1 --oneline
-                    git submodule status
+                    set -eu
+                    MINIO_ROOT_USER=ci-check \
+                    MINIO_ROOT_PASSWORD=ci-check-placeholder \
+                    docker compose -f docker-compose.yml config >/dev/null
+                    echo "docker-compose.yml валиден"
                 '''
             }
         }
-        
-        stage('Prepare Remote Directory') {
-            steps {
-                sshPublisher(
-                    publishers: [
-                        sshPublisherDesc(
-                            configName: env.REMOTE_SERVER,
-                            transfers: [
-                                sshTransfer(
-                                    execCommand: '''
-                                        #!/bin/bash
-                                        set -ex
-                                        
-                                        echo "=== Preparing remote directory ==="
-                                        
-                                        rm -rf ''' + env.PROJECT_DIR + '''
-                                        mkdir -p ''' + env.PROJECT_DIR + '''
-                                        
-                                        echo "=== Directory prepared ==="
-                                        ls -la ''' + env.REMOTE_DIR + '''
-                                    '''
-                                )
-                            ],
-                            verbose: true
-                        )
-                    ]
-                )
-            }
-        }
-        
-        stage('Copy Files to Remote') {
-            steps {
-                script {
-                    sh '''
-                        echo "=== Creating tarball ==="
-                        
-                        tar --exclude='.git' \
-                            --exclude='.gitignore' \
-                            --exclude=''' + env.TARBALL_NAME + ''' \
-                            -czf ''' + env.TARBALL_NAME + ''' . || [ -f ''' + env.TARBALL_NAME + ''' ]
-                        
-                        if [ ! -f ''' + env.TARBALL_NAME + ''' ]; then
-                            echo "ERROR: Tarball was not created!"
-                            exit 1
-                        fi
-                        
-                        echo "=== Tarball created ==="
-                        ls -lh ''' + env.TARBALL_NAME + '''
-                    '''
+
+        stage('deploy staging') {
+            when {
+                allOf {
+                    // Имя основной ветки у наших репозиториев разное (у minio — dev),
+                    // поэтому опираемся на флаг branch-api, а не на литерал.
+                    expression { env.BRANCH_IS_PRIMARY == 'true' }
+                    expression { params.STAGING_HOST?.trim() }
                 }
-                
-                sshPublisher(
-                    publishers: [
-                        sshPublisherDesc(
-                            configName: env.REMOTE_SERVER,
-                            transfers: [
-                                sshTransfer(
-                                    sourceFiles: env.TARBALL_NAME,
-                                    removePrefix: '',
-                                    remoteDirectory: env.REMOTE_DIR
-                                ),
-                                sshTransfer(
-                                    execCommand: '''
-                                        #!/bin/bash
-                                        set -ex
-                                        
-                                        cd ''' + env.PROJECT_DIR + '''
-                                        
-                                        echo "=== Extracting tarball ==="
-                                        tar -xzf ../''' + env.TARBALL_NAME + '''
-                                        rm ../''' + env.TARBALL_NAME + '''
-                                        
-                                        echo "=== Files extracted ==="
-                                        ls -la
-                                    '''
-                                )
-                            ],
-                            verbose: true
-                        )
-                    ]
+            }
+            steps {
+                composeDeploy(
+                    env: 'staging',
+                    host: params.STAGING_HOST,
+                    path: params.STAGING_PATH,
+                    approve: false
                 )
             }
         }
-        
-        stage('Deploy') {
+
+        stage('deploy prod') {
+            when {
+                allOf {
+                    expression { env.BRANCH_IS_PRIMARY == 'true' }
+                    expression { params.PROD_HOST?.trim() }
+                }
+            }
             steps {
-                sshPublisher(
-                    publishers: [
-                        sshPublisherDesc(
-                            configName: env.REMOTE_SERVER,
-                            transfers: [
-                                sshTransfer(
-                                    execCommand: '''
-                                        #!/bin/bash
-                                        set -ex
-                                        
-                                        echo "=== Deploying application ==="
-
-                                        cd ''' + env.PROJECT_DIR + '''
-                                        
-                                        docker compose down || true
-                                        
-                                        export MINIO_ROOT_USER=''' + env.MINIO_ROOT_USER + '''
-                                        export MINIO_ROOT_PASSWORD=''' + env.MINIO_ROOT_PASSWORD + '''
-                                        
-                                        docker network create local-network || true
-                                        docker compose up -d ''' + env.DOCKER_DEPLOYMENT_TARGET + '''
-
-                                        echo "=== Checking container status ==="
-                                        docker compose ps -a
-                                        
-                                        echo "=== Deployment complete ==="
-                                    '''
-                                )
-                            ],
-                            verbose: true
-                        )
-                    ]
+                // 🔴 Прод — только с явного подтверждения. В хранилище лежат записи разговоров
+                // и файлы WhatsApp; перезапуск означает недоступность файлов для всех
+                // сервисов, которые в него ходят.
+                composeDeploy(
+                    env: 'prod',
+                    host: params.PROD_HOST,
+                    path: params.PROD_PATH,
+                    approve: true
                 )
             }
         }
     }
-    
-    post {
-        success {
-            echo "Deployment successful to ${PROJECT_DIR}!"
-        }
-        
-        failure {
-            echo 'Deployment failed!'
-        }
 
-        always {
-            sh 'rm -f *.tar.gz || true'
-        }
+    post {
+        always  { notify(currentBuild.currentResult) }
+        cleanup { cleanWs() }
     }
 }
-
-
-
