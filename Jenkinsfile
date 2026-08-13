@@ -61,6 +61,12 @@ pipeline {
                     MINIO_ROOT_PASSWORD=ci-check-placeholder \
                     docker compose -f docker-compose.yml config >/dev/null
                     echo "docker-compose.yml валиден"
+
+                    # Скрипт инициализации исполняется на целевом хосте внутри контейнера
+                    # mc, где отладчика нет и логи видны только постфактум. Синтаксис
+                    # ловим здесь: ошибка в нём означает стек без бакетов и без учётки CRM.
+                    sh -n _docker/init.sh
+                    echo "_docker/init.sh валиден"
                 '''
             }
         }
@@ -80,6 +86,19 @@ pipeline {
                     host: params.STAGING_HOST,
                     path: params.STAGING_PATH,
                     credentialsId: env.DEPLOY_CREDENTIALS_ID,
+                    // Ключи сервисного аккаунта CRM (HAP-509) — из хранилища папки `crm`,
+                    // а не копипастой в .env на хосте. Именно копипаста пароля между
+                    // .env разных сервисов и породила три копии одного секрета: ротация
+                    // в источнике до хоста не доезжала. Теперь источник один, а разносит
+                    // значения выкатка (jenkins-infra/DEPLOY.md §10).
+                    //
+                    // Сами root-креды хранилища сюда НЕ едут: они на хосте с самого
+                    // начала, и подменять их из CI — отдельное решение с отдельным риском
+                    // (не тот пароль в .env = хранилище не поднимется).
+                    envSecrets: [
+                        MINIO_CRM_ACCESS_KEY: 'crm-minio-access-key',
+                        MINIO_CRM_SECRET_KEY: 'crm-minio-secret-key',
+                    ],
                     approve: false
                 )
             }
@@ -101,6 +120,15 @@ pipeline {
                     host: params.PROD_HOST,
                     path: params.PROD_PATH,
                     credentialsId: env.PROD_CREDENTIALS_ID,
+                    // У стенда и прода credential'ы РАЗНЫЕ: общий означал бы стендовый
+                    // ключ на боевом хранилище. Прод-credential'ов ещё нет — как и
+                    // прод-хоста; идентификаторы проставлены заранее, чтобы первая
+                    // прод-выкатка упала с «credential not found», а не завела на боевом
+                    // MinIO учётку со стендовым ключом.
+                    envSecrets: [
+                        MINIO_CRM_ACCESS_KEY: 'crm-minio-access-key-prod',
+                        MINIO_CRM_SECRET_KEY: 'crm-minio-secret-key-prod',
+                    ],
                     approve: true
                 )
             }
