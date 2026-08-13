@@ -12,6 +12,21 @@
 pipeline {
     agent any
 
+    environment {
+        // Ключи выкатки — из хранилища ПАПКИ `crm`, а не из общего (HAP-500). Общий
+        // deploy-staging-ssh виден сборке любого подключённого проекта: сборка исполняет
+        // Jenkinsfile из своего репозитория, и запросить чужой credential по id ей ничто
+        // не мешает.
+        // Папка общая с crm, и это не про предметную область: CRM ходит в это хранилище ROOT-кредами
+        // MinIO, то есть держит их у себя в .env. Отдельная папка нарисовала бы границу, которой
+        // нет; своя появится, когда у CRM будет сервисный аккаунт вместо root.
+        DEPLOY_CREDENTIALS_ID = 'deploy-crm-staging-ssh'
+        // Прод-ключа ещё нет — как и прод-хоста. Идентификатор проставлен заранее, чтобы
+        // первая прод-выкатка упала с «credential not found», а не уехала на боевую машину
+        // стендовым ключом.
+        PROD_CREDENTIALS_ID   = 'deploy-crm-prod-ssh'
+    }
+
     parameters {
         // Целевые хосты — параметрами с дефолтами прямо здесь.
         // ⚠️ При смене дефолта помните: Jenkins применяет новое значение со ВТОРОЙ сборки
@@ -64,6 +79,7 @@ pipeline {
                     env: 'staging',
                     host: params.STAGING_HOST,
                     path: params.STAGING_PATH,
+                    credentialsId: env.DEPLOY_CREDENTIALS_ID,
                     approve: false
                 )
             }
@@ -84,6 +100,7 @@ pipeline {
                     env: 'prod',
                     host: params.PROD_HOST,
                     path: params.PROD_PATH,
+                    credentialsId: env.PROD_CREDENTIALS_ID,
                     approve: true
                 )
             }
