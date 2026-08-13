@@ -92,6 +92,16 @@ services:
       # стек: список должен совпадать с AWS_*_BUCKET в окружении CRM.
       MINIO_CRM_BUCKETS: ${MINIO_CRM_BUCKETS:-registry,record,whatsapp}
       MINIO_CRM_POLICY: ${MINIO_CRM_POLICY:-crm-app}
+      # Сервисный аккаунт телефонии (HAP-516): telephony-ari складывает сюда записи
+      # разговоров и до сих пор делал это ROOT-кредами. Ключи приезжают в .env выкаткой
+      # из Credentials Store папки `crm` — так же, как ключи CRM выше. Пустые значения —
+      # не ошибка: аккаунт просто не заводится.
+      MINIO_TELEPHONY_ACCESS_KEY: ${MINIO_TELEPHONY_ACCESS_KEY:-}
+      MINIO_TELEPHONY_SECRET_KEY: ${MINIO_TELEPHONY_SECRET_KEY:-}
+      # Только бакет записей разговоров. Список должен совпадать с MINIO_BUCKET в
+      # окружении telephony-ari; менять согласованно с владельцем сервиса.
+      MINIO_TELEPHONY_BUCKETS: ${MINIO_TELEPHONY_BUCKETS:-record}
+      MINIO_TELEPHONY_POLICY: ${MINIO_TELEPHONY_POLICY:-telephony-ari}
     volumes:
       # Только чтение: контейнеру нечего писать в собственный скрипт.
       - ./_docker/init.sh:/init.sh:ro
