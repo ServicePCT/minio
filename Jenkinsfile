@@ -95,9 +95,19 @@ pipeline {
                     // Сами root-креды хранилища сюда НЕ едут: они на хосте с самого
                     // начала, и подменять их из CI — отдельное решение с отдельным риском
                     // (не тот пароль в .env = хранилище не поднимется).
+                    //
+                    // Ключи сервисного аккаунта телефонии (HAP-516) лежат в этом же
+                    // хранилище, хотя сам telephony-ari живёт в папке `telephony`:
+                    // credential виден тому, кто заводит учётку (minio, папка `crm`), а
+                    // до потребителя те же значения едут своим путём — Secret-file
+                    // credential'ом `telephony-ari-staging-env` папки `telephony`.
+                    // Держать их в папке `telephony` нельзя: оттуда их не прочитала бы
+                    // сборка minio, а без неё аккаунт просто не заведётся.
                     envSecrets: [
                         MINIO_CRM_ACCESS_KEY: 'crm-minio-access-key',
                         MINIO_CRM_SECRET_KEY: 'crm-minio-secret-key',
+                        MINIO_TELEPHONY_ACCESS_KEY: 'minio-telephony-access-key',
+                        MINIO_TELEPHONY_SECRET_KEY: 'minio-telephony-secret-key',
                     ],
                     approve: false
                 )
@@ -128,6 +138,8 @@ pipeline {
                     envSecrets: [
                         MINIO_CRM_ACCESS_KEY: 'crm-minio-access-key-prod',
                         MINIO_CRM_SECRET_KEY: 'crm-minio-secret-key-prod',
+                        MINIO_TELEPHONY_ACCESS_KEY: 'minio-telephony-access-key-prod',
+                        MINIO_TELEPHONY_SECRET_KEY: 'minio-telephony-secret-key-prod',
                     ],
                     approve: true
                 )
