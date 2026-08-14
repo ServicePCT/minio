@@ -80,7 +80,8 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:?}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?}
-      MINIO_BUCKETS: ${MINIO_BUCKETS:-registry,record,whatsapp}
+      # chat-attachments (HAP-535) — вложения и голосовые внутреннего чата операторов.
+      MINIO_BUCKETS: ${MINIO_BUCKETS:-registry,record,whatsapp,chat-attachments}
       # Сервисный аккаунт CRM (HAP-509): узкая учётка вместо root-кредов, которыми CRM
       # ходит в хранилище сейчас. Ключи приезжают в .env выкаткой из Credentials Store
       # папки `crm`. Пустые значения — не ошибка: аккаунт просто не заводится, бакеты
@@ -90,7 +91,9 @@ services:
       MINIO_CRM_SECRET_KEY: ${MINIO_CRM_SECRET_KEY:-}
       # Бакеты, к которым аккаунт получает доступ. По умолчанию — те же, что создаёт
       # стек: список должен совпадать с AWS_*_BUCKET в окружении CRM.
-      MINIO_CRM_BUCKETS: ${MINIO_CRM_BUCKETS:-registry,record,whatsapp}
+      # chat-attachments (HAP-535) идёт этой же учётке: аккаунт заводится на сервис, а не
+      # на бакет, и потребитель у чата один — CRM.
+      MINIO_CRM_BUCKETS: ${MINIO_CRM_BUCKETS:-registry,record,whatsapp,chat-attachments}
       MINIO_CRM_POLICY: ${MINIO_CRM_POLICY:-crm-app}
       # Сервисный аккаунт телефонии (HAP-516): telephony-ari складывает сюда записи
       # разговоров и до сих пор делал это ROOT-кредами. Ключи приезжают в .env выкаткой
