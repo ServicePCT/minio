@@ -18,7 +18,10 @@
 # Отдельный пользователь с политикой ровно на нужные бакеты возвращает границу: за пределы
 # своих бакетов он выйти не может и создать новый — тоже.
 #
-#   * `crm-app`      — CRM (HAP-509): registry / record / whatsapp, чтение и запись.
+#   * `crm-app`      — CRM (HAP-509): registry / record / whatsapp / documents /
+#                      chat-attachments, чтение и запись. Все диски CRM (`s3`, `s3records`,
+#                      `s3whatsapp`, `s3documents`, `s3chat`) ходят одной парой ключей,
+#                      поэтому учётка одна на сервис, а не на бакет.
 #   * `telephony-ari` — телефония (HAP-516): бакет записей разговоров, БЕЗ удаления.
 #
 # Аккаунты ДОБАВЛЯЮТСЯ рядом. Root-креды здесь не отзываются и не ротируются — это
@@ -30,7 +33,7 @@ set -eu
 : "${MINIO_ROOT_PASSWORD:?init: не задан MINIO_ROOT_PASSWORD}"
 
 MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://minio:9000}"
-MINIO_BUCKETS="${MINIO_BUCKETS:-registry,record,whatsapp}"
+MINIO_BUCKETS="${MINIO_BUCKETS:-registry,record,whatsapp,documents,chat-attachments}"
 
 MINIO_CRM_ACCESS_KEY="${MINIO_CRM_ACCESS_KEY:-}"
 MINIO_CRM_SECRET_KEY="${MINIO_CRM_SECRET_KEY:-}"
@@ -171,6 +174,11 @@ EOF
 # --- Сервисный аккаунт CRM (HAP-509) ---------------------------------------------------
 # Чтение и запись в свои бакеты, включая удаление: CRM управляет жизненным циклом
 # загруженных документов и файлов WhatsApp.
+#
+# HAP-535: сюда же добавлен `chat-attachments` — вложения и голосовые внутреннего чата
+# операторов. Тот же набор действий подходит без оговорок: удаление сообщения с файлом
+# должно уносить и объект, иначе бакет копит осиротевшие вложения, на которые уже никто
+# не сошлётся. Отдельная учётка не заводится: потребитель один и тот же — CRM.
 provision_account \
     'crm' \
     "$MINIO_CRM_ACCESS_KEY" \
