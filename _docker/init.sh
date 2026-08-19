@@ -45,6 +45,13 @@ MINIO_TELEPHONY_SECRET_KEY="${MINIO_TELEPHONY_SECRET_KEY:-}"
 MINIO_TELEPHONY_BUCKETS="${MINIO_TELEPHONY_BUCKETS:-record}"
 MINIO_TELEPHONY_POLICY="${MINIO_TELEPHONY_POLICY:-telephony-ari}"
 
+MINIO_FILES_ACCESS_KEY="${MINIO_FILES_ACCESS_KEY:-}"
+MINIO_FILES_SECRET_KEY="${MINIO_FILES_SECRET_KEY:-}"
+MINIO_FILES_BUCKETS="${MINIO_FILES_BUCKETS:-documents}"
+MINIO_FILES_POLICY="${MINIO_FILES_POLICY:-file-service}"
+# Срок хранения объектов в бакете file_service (HAP-620). Пусто = не удаляется ничего.
+MINIO_FILES_EXPIRE_DAYS="${MINIO_FILES_EXPIRE_DAYS:-}"
+
 # Алиас в HOME контейнера; наружу конфиг mc не переживает — контейнер одноразовый.
 mc alias set local "$MINIO_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
 
@@ -171,6 +178,47 @@ EOF
     echo "$label service account ready: $access_key (политика $policy_name)"
 }
 
+# --- Правила жизненного цикла бакета ---------------------------------------------------
+# Аргументы: <бакет> <дней до удаления объекта>
+# Пустой срок = правило не ставится и существующая конфигурация не трогается.
+#
+# Идемпотентность — через `mc ilm rule import`: он ЗАМЕНЯЕТ конфигурацию бакета целиком
+# тем, что подали на вход. `mc ilm rule add` при каждом прогоне добавлял бы ещё одно
+# правило с новым сгенерированным ID, и после десятка выкаток в бакете лежала бы стопка
+# дублей — а скрипт гоняется на каждой выкатке.
+#
+# ⚠️ Обратная сторона замены: правило, заведённое руками через консоль, следующая выкатка
+# сотрёт. Правила живут здесь, в коде, — как и сами аккаунты. Снять правило = очистить
+# срок в .env И один раз выполнить `mc ilm rule rm --all --force local/<бакет>`: пустой
+# список сюда сознательно не подаётся, чтобы опечатка в переменной не обнулила молча
+# жизненный цикл работающего бакета.
+#
+# ⚠️ Правила на брошенные multipart-загрузки здесь НЕТ намеренно, хотя в S3 такое действие
+# есть (AbortIncompleteMultipartUpload). MinIO его в lifecycle не принимает — отвечает
+# «XML ... did not validate against our published schema», и флага под него нет даже в
+# `mc ilm rule add` (проверено 19.08.2026 на RELEASE.2025-09-07 + mc RELEASE.2025-04-16).
+# Убирает их сам сервер: `mc admin config get <alias> api` → stale_uploads_expiry=24h,
+# stale_uploads_cleanup_interval=6h. То есть проблема решена, просто не здесь.
+apply_lifecycle() {
+    bucket="$1"
+    expire_days="$2"
+
+    # Бакет может быть не заведён: на хосте список бакетов задан в .env явным значением и
+    # не обязан совпадать с дефолтом из репозитория (HAP-539). Правило на несуществующий
+    # бакет — ошибка, поэтому создаём здесь же.
+    mc mb --ignore-existing "local/$bucket" >/dev/null
+
+    if [ -z "$expire_days" ]; then
+        echo "lifecycle: $bucket — срок хранения не задан, конфигурация не менялась"
+        return 0
+    fi
+
+    ilm_file="/tmp/$bucket-ilm.json"
+    printf '{"Rules":[{"ID":"expire-objects","Status":"Enabled","Expiration":{"Days":%s}}]}' "$expire_days" > "$ilm_file"
+    mc ilm rule import "local/$bucket" < "$ilm_file" >/dev/null
+    echo "lifecycle ready: $bucket (expire: $expire_days дн.)"
+}
+
 # --- Сервисный аккаунт CRM (HAP-509) ---------------------------------------------------
 # Чтение и запись в свои бакеты, включая удаление: CRM управляет жизненным циклом
 # загруженных документов и файлов WhatsApp.
@@ -217,3 +265,49 @@ provision_account \
     "$MINIO_TELEPHONY_POLICY" \
     'Telephony' \
     's3:GetObject,s3:PutObject,s3:AbortMultipartUpload,s3:ListMultipartUploadParts'
+
+# --- Сервисный аккаунт файлового сервиса (HAP-620) -------------------------------------
+# file_service переезжает со своего отдельного MinIO (контейнер `file-s3` в его
+# docker-compose) сюда, на общее хранилище. Решение — рекомендация architect-orchestrator
+# в HAP-609: два инстанса на одной машине дают не изоляцию, а два цикла патчинга, бэкапа и
+# мониторинга; настоящая граница — bucket + политика, а не отдельный процесс.
+#
+# Бакет — общий `documents`, тот же, что у диска `s3documents` CRM. Это решение владельца
+# (HAP-620, 19.08.2026) и оно осознанное: фронт скачивает документы старым путём
+# `GET /api/download/{file_path}?disk=s3documents`, то есть читает именно этот бакет.
+# Сложив файлы file_service сюда, мы чиним скачивание сегодня, не дожидаясь мержа HAP-609
+# (проксирование байтов через CRM) и HAP-616 (переключение фронта на id файла). Ключ
+# объекта у file_service и `file_path` в ответе CRM — одна и та же строка, поэтому старый
+# URL попадает точно в объект.
+#
+# ⚠️ Цена решения: бакет входит в политику `crm-app`, а она даёт запись и УДАЛЕНИЕ. То есть
+# CRM технически может удалить документ должника мимо владельца данных. Изоляции по
+# бакетам здесь нет — граница осталась только на уровне приложения. Предлагавшийся
+# отдельный бакет `file-service` эту границу давал; вернуться к нему = поменять
+# MINIO_FILES_BUCKETS и STORAGE_BUCKET у file_service, но тогда фронт ждёт HAP-609/616.
+#
+# Права те же, что у CRM (включая удаление): сервис управляет жизненным циклом файла —
+# DELETE /api/v1/files/{id} обязан уносить и объект, иначе бакет копит осиротевшие файлы
+# с ПДн, на которые уже никто не сошлётся, — а это ровно нарушение минимизации.
+provision_account \
+    'file-service' \
+    "$MINIO_FILES_ACCESS_KEY" \
+    "$MINIO_FILES_SECRET_KEY" \
+    "$MINIO_FILES_BUCKETS" \
+    "$MINIO_FILES_POLICY" \
+    'FileService' \
+    's3:GetObject,s3:PutObject,s3:DeleteObject,s3:AbortMultipartUpload,s3:ListMultipartUploadParts'
+
+# --- Жизненный цикл бакета file_service (HAP-620) --------------------------------------
+# Retention у документов должников и у записей разговоров разный, и полагаться на дефолт
+# общего инстанса нельзя (требование architect-orchestrator к консолидации). Дефолта у
+# MinIO, впрочем, никакого и нет: без правил не удаляется ничего и никогда.
+#
+#
+# По умолчанию срок НЕ задан (MINIO_FILES_EXPIRE_DAYS пуст) — это не недоделка, а
+# сознательный отказ придумывать число: автоудаление документа должника необратимо и
+# должно опираться на регламент хранения, а не на дефолт из конфига. Механизм готов,
+# включение — одна переменная, когда регламент назовут.
+for b in $(echo "$MINIO_FILES_BUCKETS" | tr ',' ' '); do
+    apply_lifecycle "$b" "$MINIO_FILES_EXPIRE_DAYS"
+done
