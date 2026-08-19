@@ -106,6 +106,19 @@ services:
       # окружении telephony-ari; менять согласованно с владельцем сервиса.
       MINIO_TELEPHONY_BUCKETS: ${MINIO_TELEPHONY_BUCKETS:-record}
       MINIO_TELEPHONY_POLICY: ${MINIO_TELEPHONY_POLICY:-telephony-ari}
+      # Сервисный аккаунт файлового сервиса (HAP-620): file_service переезжает со своего
+      # отдельного MinIO на это хранилище. Ключи — как у всех, из .env выкаткой; пустые
+      # значения не ошибка, аккаунт просто не заводится.
+      MINIO_FILES_ACCESS_KEY: ${MINIO_FILES_ACCESS_KEY:-}
+      MINIO_FILES_SECRET_KEY: ${MINIO_FILES_SECRET_KEY:-}
+      # 🔴 Отдельный бакет, не общий `documents`: тот принадлежит CRM (диск s3documents,
+      # HAP-535) и входит в политику crm-app. Список обязан совпадать с STORAGE_BUCKET в
+      # окружении file_service; менять согласованно с владельцем сервиса.
+      MINIO_FILES_BUCKETS: ${MINIO_FILES_BUCKETS:-file-service}
+      MINIO_FILES_POLICY: ${MINIO_FILES_POLICY:-file-service}
+      # Срок хранения документов должников. Пуст намеренно: см. .env.example — это решение
+      # регламента, а не конфига. Пока пусто, не удаляется ничего.
+      MINIO_FILES_EXPIRE_DAYS: ${MINIO_FILES_EXPIRE_DAYS:-}
     volumes:
       # Только чтение: контейнеру нечего писать в собственный скрипт.
       - ./_docker/init.sh:/init.sh:ro
