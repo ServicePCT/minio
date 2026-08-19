@@ -111,10 +111,11 @@ services:
       # значения не ошибка, аккаунт просто не заводится.
       MINIO_FILES_ACCESS_KEY: ${MINIO_FILES_ACCESS_KEY:-}
       MINIO_FILES_SECRET_KEY: ${MINIO_FILES_SECRET_KEY:-}
-      # 🔴 Отдельный бакет, не общий `documents`: тот принадлежит CRM (диск s3documents,
-      # HAP-535) и входит в политику crm-app. Список обязан совпадать с STORAGE_BUCKET в
-      # окружении file_service; менять согласованно с владельцем сервиса.
-      MINIO_FILES_BUCKETS: ${MINIO_FILES_BUCKETS:-file-service}
+      # Общий с CRM бакет `documents` — решение владельца (HAP-620): фронт скачивает файлы
+      # старым путём `?disk=s3documents`, который читает именно его. ⚠️ Бакет входит и в
+      # политику crm-app с правом удаления — изоляции по бакетам тут нет, см. init.sh.
+      # Список обязан совпадать с STORAGE_BUCKET в окружении file_service.
+      MINIO_FILES_BUCKETS: ${MINIO_FILES_BUCKETS:-documents}
       MINIO_FILES_POLICY: ${MINIO_FILES_POLICY:-file-service}
       # Срок хранения документов должников. Пуст намеренно: см. .env.example — это решение
       # регламента, а не конфига. Пока пусто, не удаляется ничего.

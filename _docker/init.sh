@@ -47,7 +47,7 @@ MINIO_TELEPHONY_POLICY="${MINIO_TELEPHONY_POLICY:-telephony-ari}"
 
 MINIO_FILES_ACCESS_KEY="${MINIO_FILES_ACCESS_KEY:-}"
 MINIO_FILES_SECRET_KEY="${MINIO_FILES_SECRET_KEY:-}"
-MINIO_FILES_BUCKETS="${MINIO_FILES_BUCKETS:-file-service}"
+MINIO_FILES_BUCKETS="${MINIO_FILES_BUCKETS:-documents}"
 MINIO_FILES_POLICY="${MINIO_FILES_POLICY:-file-service}"
 # Срок хранения объектов в бакете file_service (HAP-620). Пусто = не удаляется ничего.
 MINIO_FILES_EXPIRE_DAYS="${MINIO_FILES_EXPIRE_DAYS:-}"
@@ -272,11 +272,19 @@ provision_account \
 # в HAP-609: два инстанса на одной машине дают не изоляцию, а два цикла патчинга, бэкапа и
 # мониторинга; настоящая граница — bucket + политика, а не отдельный процесс.
 #
-# 🔴 Бакет ОТДЕЛЬНЫЙ (`file-service`), а не общий `documents`. Имена совпадали случайно:
-# `documents` здесь заведён под диск `s3documents` CRM (HAP-535) и входит в политику
-# `crm-app` — положив туда документы должников из file_service, мы бы выдали CRM право
-# читать и УДАЛЯТЬ их напрямую, мимо владельца данных. После HAP-609 CRM ходит за этими
-# файлами через API file_service, прямой доступ к бакету ей не нужен вовсе.
+# Бакет — общий `documents`, тот же, что у диска `s3documents` CRM. Это решение владельца
+# (HAP-620, 19.08.2026) и оно осознанное: фронт скачивает документы старым путём
+# `GET /api/download/{file_path}?disk=s3documents`, то есть читает именно этот бакет.
+# Сложив файлы file_service сюда, мы чиним скачивание сегодня, не дожидаясь мержа HAP-609
+# (проксирование байтов через CRM) и HAP-616 (переключение фронта на id файла). Ключ
+# объекта у file_service и `file_path` в ответе CRM — одна и та же строка, поэтому старый
+# URL попадает точно в объект.
+#
+# ⚠️ Цена решения: бакет входит в политику `crm-app`, а она даёт запись и УДАЛЕНИЕ. То есть
+# CRM технически может удалить документ должника мимо владельца данных. Изоляции по
+# бакетам здесь нет — граница осталась только на уровне приложения. Предлагавшийся
+# отдельный бакет `file-service` эту границу давал; вернуться к нему = поменять
+# MINIO_FILES_BUCKETS и STORAGE_BUCKET у file_service, но тогда фронт ждёт HAP-609/616.
 #
 # Права те же, что у CRM (включая удаление): сервис управляет жизненным циклом файла —
 # DELETE /api/v1/files/{id} обязан уносить и объект, иначе бакет копит осиротевшие файлы
