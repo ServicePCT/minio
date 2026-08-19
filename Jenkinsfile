@@ -103,11 +103,19 @@ pipeline {
                     // credential'ом `telephony-ari-staging-env` папки `telephony`.
                     // Держать их в папке `telephony` нельзя: оттуда их не прочитала бы
                     // сборка minio, а без неё аккаунт просто не заведётся.
+                    //
+                    // Ключи сервисного аккаунта file_service (HAP-620) лежат там же и по
+                    // той же причине: сборка minio заводит учётку, а до потребителя те же
+                    // значения едут выкаткой file_service. Credential'ы заведены
+                    // 19.08.2026 (jenkins-infra, SPEC папки `crm`) — без них эта строка
+                    // уронила бы выкатку хранилища на «credential not found».
                     envSecrets: [
                         MINIO_CRM_ACCESS_KEY: 'crm-minio-access-key',
                         MINIO_CRM_SECRET_KEY: 'crm-minio-secret-key',
                         MINIO_TELEPHONY_ACCESS_KEY: 'minio-telephony-access-key',
                         MINIO_TELEPHONY_SECRET_KEY: 'minio-telephony-secret-key',
+                        MINIO_FILES_ACCESS_KEY: 'minio-files-access-key',
+                        MINIO_FILES_SECRET_KEY: 'minio-files-secret-key',
                     ],
                     approve: false
                 )
@@ -140,6 +148,8 @@ pipeline {
                         MINIO_CRM_SECRET_KEY: 'crm-minio-secret-key-prod',
                         MINIO_TELEPHONY_ACCESS_KEY: 'minio-telephony-access-key-prod',
                         MINIO_TELEPHONY_SECRET_KEY: 'minio-telephony-secret-key-prod',
+                        MINIO_FILES_ACCESS_KEY: 'minio-files-access-key-prod',
+                        MINIO_FILES_SECRET_KEY: 'minio-files-secret-key-prod',
                     ],
                     approve: true
                 )
