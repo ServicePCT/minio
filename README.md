@@ -113,6 +113,8 @@ CRM ходит в это хранилище **root-кредами** — `hd-mini
 (см. `jenkins-infra/DEPLOY.md` §10). Ротация = поменять значение на контроллере
 (`secrets/crm_minio_*`), `stack.sh reload`, выкатить `minio` и `crm`. Копипаста между
 `.env` разных сервисов и была причиной того, что один секрет оказался в трёх местах.
+Маршрут по шагам, с проверками и разбором «в env CRM не вижу значений» — в разделе
+«Ключи CRM: MinIO → Jenkins → `.env` CRM» ниже.
 
 Пустые `MINIO_CRM_*` — не ошибка: аккаунт не заводится, бакеты создаются как обычно. Это
 нужно, чтобы стек поднимался на машине, где ключи ещё не разложены.
@@ -350,7 +352,8 @@ decommission `file-s3`) описан в репозитории file_service: `pl
 
 Для нового сервиса — не руками в консоли: аккаунт, заведённый кликами, исчезнет при
 пересоздании стека и не будет виден в ревью. Заводите его в `_docker/init.sh` по образцу
-CRM (пользователь + своя политика на свои бакеты), а значения доставляйте выкаткой.
+CRM (пользователь + своя политика на свои бакеты), а значения доставляйте выкаткой —
+сквозной маршрут разобран следующим разделом.
 
 Если ключ всё же нужен разово (разбор инцидента, миграция данных):
 
@@ -358,8 +361,137 @@ CRM (пользователь + своя политика на свои баке
 2. Access Keys → создать ключ.
 3. Регион уже задан через `MINIO_REGION` (`kz-ala-dev`) — в консоли менять не нужно.
 
+⚠️ Такой ключ — **service account root'а**: он наследует права родителя, то есть даёт
+администраторский доступ ко всему хранилищу. Это допустимо для разовой операции руками и
+недопустимо как креды приложения. Отзывать его там же, в Access Keys, сразу по завершении
+работы.
+
 ⚠️ Регион менять на работающем хранилище нельзя без согласования: клиенты S3 подписывают
 им запросы, и подпись разъедется у всех, кто уже настроен.
+
+## Ключи CRM: MinIO → Jenkins → `.env` CRM (HAP-730)
+
+Сквозной маршрут для `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` в CRM — от того, кто
+заводит пару, до строки в `.env` на стенде. Всё то же самое верно для телефонии и
+file_service, отличаются только имена переменных и credential'ов (таблица в конце).
+
+### 🔴 Направление маршрута: Jenkins → MinIO, а не наоборот
+
+Интуитивный порядок «зайти в веб-консоль MinIO, создать там Access key, вставить его в
+креды Jenkins» для сервисных аккаунтов **не подходит**, хотя и выглядит естественно:
+
+* ключ, созданный в консоли под `MINIO_ROOT_USER`, — это service account root'а. Он
+  наследует root-права: политика `crm-app` к нему отношения не имеет, и CRM снова получила
+  бы полный доступ к хранилищу. Ровно от этого уходили в HAP-509;
+* учётку `crm-app` при каждой выкатке заводит `_docker/init.sh` (`mc admin user add` с
+  парой из окружения). Пара из консоли ему неизвестна, поэтому рядом появился бы второй
+  аккаунт, а какой из двух в `.env` CRM — выяснялось бы по `AccessDenied`;
+* аккаунт из консоли не описан кодом: он не переживёт пересоздание стека и не пройдёт
+  ревью в PR.
+
+Поэтому пару **генерирует человек** (или она уже существует), кладёт в Jenkins, а MinIO
+получает её выкаткой и заводит под неё пользователя с узкой политикой. Хранилище здесь —
+потребитель значения, а не его источник.
+
+### Четыре шага и где что лежит
+
+| Шаг | Где | Что происходит |
+|---|---|---|
+| 1 | контроллер Jenkins `192.168.127.103`, `~/jenkins-infra/secrets/crm_minio_access_key`, `crm_minio_secret_key` | человек кладёт пару файлами, `chmod 600`; в гит каталог не попадает |
+| 2 | Credentials Store, папка `crm`: `crm-minio-access-key`, `crm-minio-secret-key` | `stack.sh reload` подхватывает файлы через `casc/provision-folder-credentials.groovy` |
+| 3 | сборка `minio` → `/srv/minio/.env`: `MINIO_CRM_ACCESS_KEY`, `MINIO_CRM_SECRET_KEY` | `composeDeploy(envSecrets:)`, дальше `_docker/init.sh` заводит пользователя с политикой `crm-app` |
+| 4 | сборка `crm` → `/srv/crm/.env`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `composeDeploy(envSecrets:)`, CRM ходит этой парой во все свои диски |
+
+Пара **одна**, имён у неё два: у того, кто учётку *заводит* (`minio`) — `MINIO_CRM_*`, у
+того, кто ею *ходит* (`crm`) — `AWS_*`. Оба credential'а лежат в папке `crm` именно
+поэтому: значение нужно обеим сборкам, а из чужой папки его не прочитать.
+
+Ни на одном шаге значение не попадает в гит, в лог сборки и в командную строку — как это
+устроено, описано в `jenkins-shared-library/vars/composeDeploy.groovy` (`writeEnvSecrets`).
+
+### Завести пару с нуля или ротировать
+
+```bash
+# на контроллере (192.168.127.103), под prog
+cd ~/jenkins-infra
+printf %s 'crm-app'               > ./secrets/crm_minio_access_key   # логин учётки, ≥ 3 символов
+openssl rand -hex 16 | tr -d '\n' > ./secrets/crm_minio_secret_key   # секрет, ≥ 8 символов
+chmod 600 ./secrets/crm_minio_access_key ./secrets/crm_minio_secret_key
+sudo ./scripts/stack.sh reload
+```
+
+Затем выкатить **в этом порядке**: сначала джобу `minio` (папка `crm`) — она выровняет
+секретный ключ пользователя в хранилище, потом `crm` — она положит новое значение в `.env`
+приложения. Обратный порядок оставляет CRM с новым ключом против старого пользователя,
+то есть `AccessDenied` на всех дисках до прогона `minio`.
+
+* `openssl rand -hex`, а не `base64`: алфавит `[0-9a-f]` не ломается ни о шелл на хосте,
+  ни о `.env`;
+* access key — это **логин**, не секрет: он печатается в логе `minio-init`
+  (`crm service account ready: <access key> (политика crm-app)`). Секретный ключ не
+  печатается нигде;
+* менять access key без нужды не стоит: старый пользователь в хранилище при этом не
+  удаляется, `init.sh` заведёт рядом нового. Ротация секрета такого следа не оставляет;
+* 🔴 прод-credential'ов (`crm-minio-*-prod`) в хранилище нет намеренно — первая прод-выкатка
+  упадёт с `credential not found`, чтобы на боевую машину не уехал стендовый секрет.
+  Заводятся вместе с прод-хостом.
+
+### Как проверить, что значение доехало
+
+⚠️ **`docker exec api-app printenv | grep AWS_` не покажет ничего — и это норма.** В
+окружение контейнера CRM эти переменные не передаются: `docker-compose.yml` монтирует
+каталог проекта целиком (`./:/var/www`), а `.env` читает Laravel (Dotenv) уже внутри
+приложения. Отсутствие `AWS_*` в `printenv` — не признак того, что ключи не доехали; так
+выглядит рабочая установка. Смотреть надо в файл и в поведение приложения.
+
+```bash
+# на vm-stage: строки есть и не пустые (печатаем длину, не значение)
+awk -F= '/^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)=/ {v = substr($0, index($0, "=") + 1);
+    print $1 " len=" length(v)}' /srv/crm/.env
+```
+
+```bash
+# на vm-stage: CRM реально ходит во все свои бакеты (значений не печатает)
+cat > /tmp/s3check.php <<'PHP'
+<?php
+foreach (['s3', 's3records', 's3whatsapp', 's3documents', 's3chat'] as $d) {
+    try {
+        printf("%-12s OK, объектов: %d\n", $d, count(Illuminate\Support\Facades\Storage::disk($d)->files()));
+    } catch (Throwable $e) {
+        printf("%-12s FAIL %s\n", $d, substr($e->getMessage(), 0, 120));
+    }
+}
+PHP
+docker cp /tmp/s3check.php api-app:/tmp/s3check.php
+docker exec api-app php artisan tinker /tmp/s3check.php
+docker exec api-app rm -f /tmp/s3check.php; rm -f /tmp/s3check.php
+```
+
+```bash
+# на vm-stage: учётка действительно заведена в хранилище
+docker logs minio-init 2>&1 | tail -n 12   # ждём "crm service account ready: … (политика crm-app)"
+```
+
+Расшифровка результатов:
+
+| Симптом | Причина | Что делать |
+|---|---|---|
+| в `.env` строка пуста или отсутствует | сборка `crm` не доходила до `deploy staging`, либо `envSecrets` не связался с credential'ом | лог сборки: строка `секреты из Credentials Store → …/.env`; при `credential not found` — `stack.sh reload` на контроллере |
+| `len=` есть, но диски отдают `AccessDenied` | пользователь в хранилище не выровнен под текущий секрет | выкатить `minio`, затем повторить проверку |
+| `AccessDenied` только на одном диске | имя бакета в `AWS_*_BUCKET` не входит в `MINIO_CRM_BUCKETS` | сверить списки, см. «Список бакетов задан в ДВУХ местах» |
+| `NoSuchBucket` | бакета нет в `MINIO_BUCKETS` | добавить и выкатить `minio` |
+
+Порядок для остальных потребителей — тот же, отличаются имена:
+
+| Сервис | Файлы на контроллере (`secrets/`) | Credential (папка) | Переменные у потребителя |
+|---|---|---|---|
+| CRM | `crm_minio_access_key`, `crm_minio_secret_key` | `crm-minio-access-key`, `crm-minio-secret-key` (`crm`) | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
+| telephony-ari | `telephony_minio_access_key`, `telephony_minio_secret_key`, `telephony-ari-staging.env` | `minio-telephony-access-key`, `minio-telephony-secret-key` (`crm`) + `telephony-ari-staging-env` (`telephony`) | `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY` |
+| file_service | `files_minio_access_key`, `files_minio_secret_key` | `minio-files-access-key`, `minio-files-secret-key` (и в `crm`, и в `files`) | `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` |
+
+⚠️ У телефонии пара с **двумя концами** (папки `crm` и `telephony`) — ротация меняет оба,
+иначе записи разговоров перестанут писаться. Порядок — в `jenkins-infra/DEPLOY.md` §10,
+раздел «Сервисный аккаунт MinIO для телефонии».
 
 ## Доступ к консоли
 
