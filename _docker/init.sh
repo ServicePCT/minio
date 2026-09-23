@@ -33,7 +33,7 @@ set -eu
 : "${MINIO_ROOT_PASSWORD:?init: не задан MINIO_ROOT_PASSWORD}"
 
 MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://minio:9000}"
-MINIO_BUCKETS="${MINIO_BUCKETS:-registry,record,whatsapp,documents,chat-attachments}"
+MINIO_BUCKETS="${MINIO_BUCKETS:-registry,record,whatsapp,documents,chat-attachments,role-profiles}"
 
 MINIO_CRM_ACCESS_KEY="${MINIO_CRM_ACCESS_KEY:-}"
 MINIO_CRM_SECRET_KEY="${MINIO_CRM_SECRET_KEY:-}"
@@ -222,6 +222,11 @@ apply_lifecycle() {
 # --- Сервисный аккаунт CRM (HAP-509) ---------------------------------------------------
 # Чтение и запись в свои бакеты, включая удаление: CRM управляет жизненным циклом
 # загруженных документов и файлов WhatsApp.
+#
+# HAP-1166: сюда же добавлен `role-profiles` — снапшоты профилей ролей (`roles:export`,
+# контракт HAP-1164). Потребитель тот же, CRM, поэтому новой учётки нет: аккаунт заводится
+# на СЕРВИС, а не на бакет. ПДн в этих файлах нет по построению — только роли, группы и
+# ключи прав, без пользователей и без `role_user`.
 #
 # HAP-535: сюда же добавлен `chat-attachments` — вложения и голосовые внутреннего чата
 # операторов. Тот же набор действий подходит без оговорок: удаление сообщения с файлом
