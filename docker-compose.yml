@@ -136,9 +136,9 @@ services:
       # Срок хранения документов должников. Пуст намеренно: см. .env.example — это решение
       # регламента, а не конфига. Пока пусто, не удаляется ничего.
       MINIO_FILES_EXPIRE_DAYS: ${MINIO_FILES_EXPIRE_DAYS:-}
-      # Бакет записей, на который ставится правило удаления дорожек STT in_/out_ через
-      # 2 суток (HAP-2952). Пусто = тот же, что MINIO_TELEPHONY_BUCKETS, то есть бакет
-      # записей инсталляции. Срок не настраивается: правило одинаково для всех (HAP-799).
+      # Дорожки STT in_/out_ в бакете записей (HAP-2952). Срок в днях; пусто = хранить
+      # бессрочно, правило не ставится. Бакет: пусто = тот же, что MINIO_TELEPHONY_BUCKETS.
+      MINIO_STT_TRACKS_EXPIRE_DAYS: ${MINIO_STT_TRACKS_EXPIRE_DAYS:-}
       MINIO_STT_TRACKS_BUCKETS: ${MINIO_STT_TRACKS_BUCKETS:-}
     volumes:
       # Только чтение: контейнеру нечего писать в собственный скрипт.
