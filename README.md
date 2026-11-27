@@ -440,6 +440,37 @@ docker logs minio-init | grep lifecycle
 docker exec minio sh -c 'mc alias set l http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null && mc ilm rule ls l/record'
 ```
 
+## Версионирование бакетов выключено (HAP-3114)
+
+`file_service` (с PR #30, HAP-3111) и CRM удаляют объект через `DeleteObject` **без
+`versionId`**. На бакете с версионированием это не удаление: появляется delete marker, а сам
+объект остаётся noncurrent-версией. Для `documents` это договор должника, то есть
+`doc-inbox:purge` и удаление из CRM удаляли бы файлы только на вид.
+
+`init.sh` создаёт бакеты через `mc mb` без `--with-versioning`, но включить версионирование
+можно и руками в консоли. Поэтому `minio-init` в конце каждого прогона проверяет факт:
+`mc version info` по всем бакетам из `MINIO_BUCKETS`, `MINIO_*_BUCKETS`. Годится только
+`un-versioned`. `Enabled` и `Suspended` (накопленные версии остаются) — проблема:
+
+| `MINIO_VERSIONING_CHECK` | Поведение |
+|---|---|
+| `fail` (по умолчанию) | предупреждение по каждому бакету и `exit 1` в самом конце: бакеты, учётки и правила уже применены. smoke `new-host-deploy` ждёт `Exited (0)` и не пропустит машину |
+| `warn` | только предупреждение в логе, `exit 0` |
+
+🔴 Скрипт версионирование **не выключает и версии не удаляет**. Удаление noncurrent-версий —
+необратимое удаление ПДн, решение принимает человек. Если проверка сработала: поставить
+`warn`, чтобы выкатки шли дальше, и поднять вопрос в задаче. К вопросу приложить только
+цифры, без имён объектов (в путях номера договоров):
+
+```bash
+docker logs minio-init 2>&1 | grep versioning
+docker exec minio sh -c 'export MC_HOST_l="http://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000"; mc version info l/documents; mc ls --versions --recursive --summarize l/documents | tail -3'
+```
+
+Состояние на 27.11.2026: на всех доступных инсталляциях (vm-stage, vm-test, vm-test2,
+debt-outsrc, debt-cession, scku-demo) все пять бакетов `un-versioned`. avg-demo не ответил
+по сети, проверить не удалось.
+
 ## Получение Access key / Secret key
 
 Для нового сервиса — не руками в консоли: аккаунт, заведённый кликами, исчезнет при
