@@ -60,6 +60,13 @@ MINIO_STT_TRACKS_BUCKETS="${MINIO_STT_TRACKS_BUCKETS:-$MINIO_TELEPHONY_BUCKETS}"
 # где за большой период накоплены дорожки, их можно распознать задним числом и приложить
 # транскрибацию к записям — правило с первой выкатки стёрло бы всё, кроме последних дней.
 MINIO_STT_TRACKS_EXPIRE_DAYS="${MINIO_STT_TRACKS_EXPIRE_DAYS:-}"
+# Что делать, если на бакете включено версионирование (HAP-3114): fail — завершиться с
+# ошибкой (по умолчанию), warn — только предупредить в логе. См. блок в конце скрипта.
+MINIO_VERSIONING_CHECK="${MINIO_VERSIONING_CHECK:-fail}"
+case "$MINIO_VERSIONING_CHECK" in
+    fail|warn) ;;
+    *) echo "versioning: ОШИБКА — MINIO_VERSIONING_CHECK должен быть fail или warn, а не '$MINIO_VERSIONING_CHECK'" >&2; exit 1 ;;
+esac
 
 # Алиас в HOME контейнера; наружу конфиг mc не переживает — контейнер одноразовый.
 mc alias set local "$MINIO_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null
@@ -410,3 +417,55 @@ for b in $(echo "$MINIO_FILES_BUCKETS,$MINIO_STT_TRACKS_BUCKETS" | tr ',' ' '); 
     seen="${seen:+$seen,}$b"
     apply_lifecycle "$b"
 done
+
+# --- Версионирование бакетов выключено (HAP-3114) --------------------------------------
+# Приложения удаляют объекты через DeleteObject без versionId (file_service, CRM). На бакете
+# с версионированием это не удаление: появляется delete marker, а сам объект — договор,
+# запись разговора, файл чата, то есть ПДн должника — остаётся noncurrent-версией и
+# занимает место бессрочно. `doc-inbox:purge` и удаление из CRM тогда удаляют только на вид.
+#
+# Скрипт версионирование не включает (`mc mb` без --with-versioning), но включить его можно
+# руками в консоли или переносом бакета вместе с настройками. Поэтому проверяем факт на
+# каждой выкатке, а не полагаемся на то, как бакет создавался.
+#
+# Suspended — тоже плохо: новые версии не копятся, но всё, что накопилось, пока было Enabled,
+# лежит noncurrent-версиями. Поэтому годным считается только «un-versioned».
+#
+# 🔴 Скрипт версионирование НЕ выключает и версии НЕ удаляет: на бакете, где оно было,
+# удаление noncurrent-версий — необратимое удаление ПДн, решение принимает человек.
+# Скрипт только поднимает тревогу.
+#
+# Проверка стоит ПОСЛЕДНЕЙ: бакеты, учётки и правила к этому моменту уже применены, и
+# режим fail не оставляет машину без учёток. Ненулевой код minio-init останавливает smoke
+# new-host-deploy (там ожидается `Exited (0)`) — новая машина не уйдёт клиенту с включённым
+# версионированием молча.
+#
+# Разбор JSON через case: в образе minio/mc нет ни grep, ни sed, ни awk (проверено
+# 27.11.2026 на RELEASE.2025-04-16). Вывод `mc version info --json`:
+#   un-versioned: {"Op":"info","status":"success","url":"...","versioning":{"status":"","MFADelete":""}}
+#   включено:     ..."versioning":{"status":"Enabled",...}
+# Всё, что не распознано, считаем проблемой: молча пропустить хуже, чем зря упасть.
+versioning_bad=''
+seen=''
+for b in $(echo "$MINIO_BUCKETS,$MINIO_CRM_BUCKETS,$MINIO_TELEPHONY_BUCKETS,$MINIO_FILES_BUCKETS,$MINIO_STT_TRACKS_BUCKETS" | tr ',' ' '); do
+    in_list "$b" "$seen" && continue
+    seen="${seen:+$seen,}$b"
+
+    if ! info="$(mc version info --json "local/$b" 2>&1)"; then
+        state='не удалось прочитать статус'
+    else
+        case "$info" in
+            *'"versioning":{"status":""'*) echo "versioning: $b — un-versioned"; continue ;;
+            *'"versioning":{"status":"Enabled"'*) state='Enabled' ;;
+            *'"versioning":{"status":"Suspended"'*) state='Suspended' ;;
+            *) state='статус не распознан' ;;
+        esac
+    fi
+    echo "versioning: ВНИМАНИЕ — $b: $state. Удаление без versionId оставит объекты noncurrent-версиями (ПДн). Ничего не выключаем и не удаляем — нужно решение человека (README, HAP-3114)" >&2
+    versioning_bad="${versioning_bad:+$versioning_bad,}$b"
+done
+
+if [ -n "$versioning_bad" ] && [ "$MINIO_VERSIONING_CHECK" = fail ]; then
+    echo "versioning: ОШИБКА — версионирование не выключено на: $versioning_bad (MINIO_VERSIONING_CHECK=fail)" >&2
+    exit 1
+fi

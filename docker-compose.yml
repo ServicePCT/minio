@@ -140,6 +140,10 @@ services:
       # бессрочно, правило не ставится. Бакет: пусто = тот же, что MINIO_TELEPHONY_BUCKETS.
       MINIO_STT_TRACKS_EXPIRE_DAYS: ${MINIO_STT_TRACKS_EXPIRE_DAYS:-}
       MINIO_STT_TRACKS_BUCKETS: ${MINIO_STT_TRACKS_BUCKETS:-}
+      # Версионирование бакетов обязано быть выключено (HAP-3114): удаление без versionId
+      # на версионированном бакете оставляет ПДн noncurrent-версией. fail — minio-init
+      # завершается с ошибкой, warn — только пишет предупреждение. См. init.sh, README.
+      MINIO_VERSIONING_CHECK: ${MINIO_VERSIONING_CHECK:-fail}
     volumes:
       # Только чтение: контейнеру нечего писать в собственный скрипт.
       - ./_docker/init.sh:/init.sh:ro
